@@ -1,0 +1,692 @@
+---
+title: 'Harvardx Data Science: Capstone - Project MovieLens'
+author: "Mathieu Labelle"
+date: "February 2020"
+output:
+  pdf_document: default
+  
+---
+***
+
+# **1 INTRODUCTION**  
+  
+  
+You will find here a document that is part of my submission for the MovieLens Project (*“the Project”*) of HarvardX PH125.09x: DATA SCIENCE: Capstone.  
+This *Project* will show how to apply some of the knowledge base and skills learned throughout the “Data Science” Series. 
+  
+# 1.1 Summarize goal  
+
+The aim of this *Project* is to create a recommendations system (“*the System*”, "*the Algorithm*" or *the Model*) using a small subset of MovieLens dataset (*“the *Dataset*”*), this subset is given as input for the *Project*. This *Dataset* shows ten million entries of movie rating. The *Dataset* is split in two, the first set (*“Edx set”*) will be used to train a machine learning *Algorithm* to predict movies ratings, and we will apply the *Algorithm* to the second *Dataset* (*“Validation set”*) as if ratings were unknown, to evaluate how close our predictions are from the true values, Root Mean Square Error (*“RMSE”*) will be used, with maximum points given for: $$RMSE<0.86490$$  
+
+# 1.2 Key Steps  
+
+To create our *Algorithm*, we will use the methodology we saw in previous course: "Machine Learning", you can find the [link] (https://rafalab.github.io/dsbook/large-datasets.html) and specifically under section 33.7.  
+This methodology use the average rating and adds bias (or effects), it also use Regularization in order to constrains the total variability of the effects sizes by penalizing large bias that come from small sample sizes.  
+
+* Find here the keys step of the *Project*:
+a. Create a *Train set* and a *Validation set*, with the code provided
+b. Explore the *Dataset*, clean and wrangle Data to prepare our analysis
+c. Create a Train and Test set for Cross validation
+d. Train our *Algorithm* to tuned or parameters using **RMSE** on test set
+e. Apply our *Algorithm* to the *Validation set*, and compute our final **RMSE**  
+
+```{r Load useful libraries,echo=FALSE, message=FALSE, warning=FALSE}
+if(!require(knitr)) install.packages("knitr", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(gridExtra)) install.packages("gridExtra", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("gridExtra", repos = "http://cran.us.r-project.org")
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(scales)) install.packages("scales", repos = "http://cran.us.r-project.org")
+```
+
+```{r Default not showing type in output,echo=FALSE}
+#Not showing Code, Alert and message in the document output
+opts_chunk$set(eval = TRUE, echo = FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r Load Dataset}
+#Please save the data on your working directory, or create them with file attached to submission.
+load("edx.Rda")
+load("validation.Rda")
+```
+
+# 1.3 Explore *Dataset*  
+
+We will briefly explore here the *Dataset* to latter do some cleaning and wrangling. Starting with the summary of the *Dataset*:
+```{r Show summary of the whole dataset}
+kable(summary(rbind(edx,validation)),caption="Summary of the Datasets")
+```
+  
+Then looking at the first 10 entries and headers:  
+```{r Show Header for edx}
+kable(head(edx), caption = "Head of Edx")
+```
+  
+The headers here are relatively clear and do not need further explanation. We can work directly on userId, movieId, rating, but we need to extract release date from the title and timestamp need to be convert in Date format. We will need also to create 2 new variables from timestamp, to aggregate year and aggregate month of rating.  
+  
+We can also look at the rating distribution:
+```{r Rating given}
+kable(edx %>% group_by(rating) %>% summarize(count = n()) %>% top_n(10) %>%
+	arrange(desc(count)), caption= "Given Ratings")
+```
+  
+Distribution of rating looks a bit erratic as users tempt to give rounded rating.  
+  
+# **2 ANALYSIS** 
+
+## 2.1 *Dataset* cleaning and wrangling  
+
+As per our conclusion on the brief exploration we did, we will clean and wrangle the *Dataset*. So we will modify our *edx set* and *validation set* into tidy/clean ones (named edx_Tidy and validation_Tidy). Here is how the first ten entries look like:  
+
+```{r Create EDX_Tidy and Validation Tidy}
+#Modify edx
+edx_Tidy_temp <- edx %>% 
+  mutate(time_stamp=date(as_datetime(timestamp)),
+         released=(str_remove_all(str_extract(title, "\\(\\d{4}\\)"),"\\(|\\)"))) %>% mutate(RY_TS=round_date(time_stamp,unit = "year")) %>% select(userId, movieId, rating, time_stamp, RY_TS, released, genres)
+
+#Modify Validation
+validation_Tidy_temp <- validation %>% 
+  mutate(time_stamp=date(as_datetime(timestamp)),
+         released=(str_remove_all(str_extract(title, "\\(\\d{4}\\)"),"\\(|\\)"))) %>% mutate(RY_TS=round_date(time_stamp,unit = "year")) %>% select(userId, movieId, rating, time_stamp, RY_TS, released, genres)
+
+# Make sure userId, movieId, RY_TS, released and genres in validation set are also in edx set
+validation_Tidy <- validation_Tidy_temp %>% 
+  semi_join(edx_Tidy_temp, by = "movieId") %>%
+  semi_join(edx_Tidy_temp, by = "userId")%>%
+  semi_join(edx_Tidy_temp, by = "released")%>%
+  semi_join(edx_Tidy_temp, by = "RY_TS") %>%
+  semi_join(edx_Tidy_temp, by = "genres")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(validation_Tidy_temp, validation_Tidy)
+edx_Tidy <- rbind(edx_Tidy_temp, removed)
+
+#In fact if we look at the DIM of removed it contains no entries, so tidy and tidy_temp were the same
+
+#Get rid of useless files
+rm(removed,validation_Tidy_temp, edx_Tidy_temp)
+```
+
+
+```{r Show New Headers}
+#Show new Header
+kable(head(edx_Tidy), caption = "Head of Edx_Tidy")
+```
+
+## 2.2 Insights with Data visualization  
+  
+### 2.2.1 Summary  
+Let's look at some statistics on the effects we want to study:  
+
+```{r Compute summary}
+rating <- summary(edx_Tidy$rating)
+
+kable(rbind(rating), caption = "Statistics")
+
+#Computing average rating of edx_Tidy
+Std<-sd(edx_Tidy$rating)
+print(paste0("Standard Deviation for the rating is: ",Std))
+
+#Computing average rating of edx_Tidy
+mu<-mean(edx_Tidy$rating)
+print(paste0("Mean of ratings is: ",mu))
+```
+  
+Minimum rating is 0.5 and maximum 5, our predictions should not be below or above.  
+  
+### 2.2.2 Entries by Average rating
+  
+```{r average rating distributions,fig.height=2.8,fig.width=3.5}
+#Movies distribution by Average Rating
+edx_Tidy%>% group_by(movieId)%>% summarise(Average_Rating=mean(rating))%>%ggplot(aes(Average_Rating))+geom_histogram(bins=30,fill="gold3")+ggtitle("Movies by average rating")+theme_bw()+geom_vline(xintercept = mu,color="black")  + 
+scale_x_continuous(breaks=c(1,2,3,mu,4,5), labels=c("1","2","3","mean","4","5")) 
+
+#Users distribution by Average Rating
+edx_Tidy%>% group_by(userId)%>% summarise(Average_Rating=mean(rating))%>%ggplot(aes(Average_Rating))+geom_histogram(bins=30,fill="gold3")+ggtitle("Users by average rating")+theme_bw()+geom_vline(xintercept = mu,color="black") + scale_x_continuous(breaks=c(1,2,3,mu,4,5), labels=c("1","2","3","mean","4","5")) 
+```
+Movies and users distribution by Average Rating look "Normal". We can see that there is movie and user effects/bias, as "good" movies tempt to be rated higher than others, as well as some users are more easygoing than others.  
+  
+### 2.2.3 Movies and users by number of ratings
+
+```{r Histograms number of ratings, fig.height=2.8,fig.width=3.5}
+edx_Tidy%>% group_by(movieId) %>% summarise(Number_of_ratings=n())%>%ggplot(aes(Number_of_ratings))+geom_histogram(bins=30,fill="darkgoldenrod3")+ggtitle("Movies by number of ratings")+scale_x_continuous(trans = 'log10') +theme_bw()
+
+edx_Tidy%>% group_by(userId) %>% summarise(Number_of_ratings=n())%>%ggplot(aes(Number_of_ratings))+geom_histogram(bins=30,fill="darkgoldenrod3")+ggtitle("Users by number of ratings")+scale_x_continuous(trans = 'log10') +theme_bw()
+```
+  
+There are movies that are rated rarely, and users who rate very few movies.  
+  
+### 2.2.4 Numbers and average rating by rating year
+
+```{r Histogram rating by release,fig.height=2.8,fig.width=7}
+#Histogram of realease_date by average rating
+edx_Tidy%>% group_by(released)%>%ggplot(aes(released))+geom_bar(fill="gold3")+ggtitle("Ratings by release year")+theme_bw()+scale_y_continuous(labels = comma,trans = 'log10')+ theme(axis.text.x = element_text(angle = 90, hjust = 1,size = 5))
+```
+ Old movies (before 1930) are rated less than 1,000 times, and older one even less.  
+  
+```{r Histogram average rating by release,fig.height=2.8,fig.width=7}
+#Histogram of realease_date by average rating
+edx_Tidy%>% group_by(released)%>%summarise(Average_of_ratings=mean(rating))%>%ggplot(aes(released,Average_of_ratings))+geom_point(color="darkgoldenrod3")+ggtitle("Average rating by release year") + theme_bw() + scale_y_continuous(trans = 'log10',breaks=c(3.3,3.5,3.7,mu,3.9), labels=c("3.3","3.5","3.7","mean","3.9")) + theme(axis.text.x = element_text(angle = 90, hjust = 1,size = 5)) + geom_hline(yintercept = mu,color="black")
+```
+  
+There is a release year effect, with older movies less rated and rated higher.  
+  
+### 2.2.5 Seosonality of rating date
+
+```{r Looking at seasonality in time_stamp, fig.height=2.8,fig.width=3.3}
+#Average rating by day
+edx_Tidy%>% mutate(Weekday=weekdays(time_stamp))%>%group_by(Weekday)%>%summarise(Average_of_ratings=mean(rating))%>%ggplot(aes(Weekday,Average_of_ratings))+geom_point(color="darkgoldenrod3")+ggtitle("Average rating by day")+theme_bw()+geom_hline(yintercept = mu,color="black") + theme(axis.text.x = element_text(angle = 45, hjust = 1,size = 12))
+
+#Average rating by month
+Month<-c("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")
+edx_Tidy%>% mutate(Month=month(time_stamp))%>%group_by(Month)%>%summarise(Average_of_ratings=mean(rating))%>%ggplot(aes(Month,Average_of_ratings))+geom_point(color="darkgoldenrod3")+ggtitle("Average rating by month")+theme_bw()+geom_hline(yintercept = mu,color="black") + scale_x_continuous(breaks=seq(1,12,1), labels=Month)
+```
+
+If you look at the scale the seasonality effect is very limited and therefore will not be taken into account to built our model.  
+  
+### 2.2.6  Average rating by month and year of rating  
+
+```{r Looking at time_stamp, fig.height=2.8,fig.width=3.3}
+#Average rating by day
+edx_Tidy%>% mutate(R_months=round_date(time_stamp,"month"))%>%group_by(R_months)%>%summarise(Average_of_ratings=mean(rating))%>%ggplot(aes(R_months,Average_of_ratings))+geom_point(color="darkgoldenrod3")+ggtitle("Average rating by day")+theme_bw()+geom_hline(yintercept = mu,color="black") + theme(axis.text.x = element_text(angle = 45, hjust = 1,size = 12))
+
+#Average rating by month
+edx_Tidy%>% mutate(R_years=round_date(time_stamp,"year"))%>%group_by(R_years)%>%summarise(Average_of_ratings=mean(rating))%>%ggplot(aes(R_years,Average_of_ratings))+geom_point(color="darkgoldenrod3")+ggtitle("Average rating by month")+theme_bw()+geom_hline(yintercept = mu,color="black")
+```
+  
+If we look at the pattern of both effects (month and year), it seems that month effect is included in year effect.  
+
+### 2.2.7  Bias of genre  
+  
+We can also look at the top 10 and bottom 10 "genres" bias (mean of rating by genre minus $\mu$) for genres that have more than 10K ratings.
+```{r Table for genres bias}
+#Top ten table for genre bias
+Top_Bias_genre<-edx%>%group_by(genres) %>% filter(n()>10000)%>% summarise(Average_Rating=round(mean(rating)-mu,digits=2)) %>%top_n(10,Average_Rating)%>%arrange(desc(Average_Rating))
+
+#Bottom ten table for genre bias
+Bottom_Bias_genre<-edx%>%group_by(genres) %>% filter(n()>10000)%>% summarise(Average_Rating=round(mean(rating)-mu,digits=2)) %>%top_n(10,-Average_Rating)%>%arrange(Average_Rating)
+
+#show table
+kable(cbind(Top_Bias_genre, Bottom_Bias_genre))
+```
+
+Genres have an effect on the rating.
+
+## 2.3 Process 
+  
+A supervised machine learning *Algorithm*, needs to be constructed step by step and evaluate at each step. Starting with a simple model,  adding features and assess the performance, to improve our *Algorithm*. Here for our *System* we will use **RMSE** to evaluate our predictions against the actual values.  
+  
+### 2.3.1 Root Mean Square Error     
+**RMSE** (Root Mean Square Error) is the standard deviation of the residuals (prediction errors). Residuals are a measure of how far from the regression line data points are; **RMSE** is a measure of how spread out these residuals are. 
+
+$$
+\tag{1}
+RMSE=\sqrt{\frac{1}{N}\sum(r-\hat{r})^2}
+$$
+
+Where $r$ is the actual rating and $\hat{r}$ is our predicted rating   
+
+```{r coding RMSE as a function}
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```
+  
+### 2.3.2 Cross-Validation  
+We will also use cross-validation to built our *System*, as we can't use the *Validation set* (Nor the Tidy one) during our training, we will need to create two sets within edx_Tidy, one to train our models, another one to evaluate its predictions with **RMSE**, respectively edx_Tidy_train and edx_Tidy_test. For the partition of our *Edx set* will set the seed to 1, in order to constantly get the same partition. The partition will be 80% and 20% for train set and test set respectively. 
+
+```{r Create our train and test sets from edx_Tidy}
+#Using function that split edx_Tidy, here in 80% for Train set  and 20% for Test set, we use set.seed in order to get always the same partition.
+set.seed(1,sample.kind = "Rounding")
+test_index <- createDataPartition(y = edx_Tidy$rating, times = 1,p = 0.2, list = FALSE)
+edx_Tidy_train_temp<- edx_Tidy[-test_index,]
+edx_Tidy_test_temp <- edx_Tidy[test_index,]
+  
+#Remove in edx_Tidy_test set the ratings where users or movies were not present in edx_Tidy_train.
+test_and_addTrain<-edx_Tidy_test_temp 
+edx_Tidy_test  <- edx_Tidy_test_temp  %>% semi_join(edx_Tidy_train_temp, by = "movieId") %>% semi_join(edx_Tidy_train_temp, by = "userId")%>% semi_join(edx_Tidy_train_temp, by = "released")%>% semi_join(edx_Tidy_train_temp, by = "RY_TS")%>% semi_join(edx_Tidy_train_temp, by = "genres")
+
+#To keep Edx_Tidy set globally unchanged, we need to add the rating we just removed from the Test set.
+addTrain<-anti_join(test_and_addTrain,edx_Tidy_test)
+edx_Tidy_train<-rbind(edx_Tidy_train_temp ,addTrain)
+
+#Delete useless Dataset
+rm(test_index, edx_Tidy_train_temp, edx_Tidy_test_temp, test_and_addTrain, addTrain)
+```
+  
+## 2.4 Modelling approach
+  
+### 2.4.1 Statistical learning approach  
+Let's suppose that we observe a quantitative response $Y$ and $p$ different predictors $X_1, X_2, X_3,....X_p$. We will assume that there is some relationship between $Y$ and $X = (X_1, X_2, X_3,....X_p)$, which can be written as:  
+$$
+\tag{2}
+Y =f(X) + \varepsilon.
+$$
+With $\varepsilon$ random *error term* with a mean equals to 0.
+
+### 2.4.2 Following previous HarvardX courses approach  
+  We are familiar with Movielens *Dataset* and with a recommendation system based on it. We already worked on it in HarvardX PH125.09x: DATA SCIENCE: Machine Learning. we will use a similar process/approach as [link] (https://rafalab.github.io/dsbook/large-datasets.html) under section 33.7 to 33.9. 
+
+### 2.4.3 Parameters taken into account to built our model  
+* The insights we gained from the data exploration and visualization are the following:
+a. Ratings are distributed around 4, but as users tempt to gave rounded ratings the distribution looks erratic.
+b. We have detect 5 bias: movie, user, release date, rating year and genres
+c. Ratings are always between 0 to 5, therefore all bias effect added to the average can't be out of theses bounds
+d. As they are variability due to small sample size for bias, we will need to use regularization method 
+  
+### 2.4.4 Model progression steps  
+* We will progress with a supervised machine learning *Algorithm*:
+a. We will first consider a simple model, where predicted ratings are just the average rating
+b. We will then use a model with movie bias
+d. We will compare with a model with two bias: movie and user
+c. We will regularized the bias of previous model
+e. We will use the year movies were released, compute its bias and add it to the previous model
+f. We will add the genres regularized bias and add it to the previous modela
+g. Finally we will aggregate timestamp by year and add it to the previous model
+  
+## 2.5 Developing and training our model.
+
+### 2.5.1 Simple Average model   
+So for our first *model*, we will consider $f(X)$ as the mean of ratings (of our train set), we can write it as:
+$$
+\tag{3}
+Y=\mu + \varepsilon
+$$
+Practically we will just use $\mu$ as our predictions in the test set, and compute the **RMSE** (see $(1)$)
+Here are the result of our first simple model:
+```{r Simple model}
+#Compute teh rating average of our train set
+mu<-mean(edx_Tidy_train$rating)
+
+#Predict ratings on our test set
+predicted_ratings <- 
+          edx_Tidy_test %>% 
+          mutate(pred = mu) %>% 
+          .$pred
+#Calculate RMSE for the given lambda
+r<-RMSE(predicted_ratings, edx_Tidy_test$rating)
+r<-round(r,5)
+model_rmse<-tibble(Model = "Simple model using average", RMSE = r)
+kable(model_rmse)
+```
+  
+### 2.5.2 Model with movie bias
+  
+Now we will introduce a bias or effect. We will use movie bias ($b_i$), that is simply the difference between $\mu$ and the average rating by movie. we can write:
+$$
+\tag{4}
+b_i=\mu - \frac{1}{N_i}\sum(rating_i)
+$$
+With $N_i$ the number of entries for $movie_i$ and $rating_i$ each rating entry for $movie_i$.  
+We can write:
+$$
+\tag{5}
+Y_i= \mu +b_i +\varepsilon_i
+$$
+Here is the result:
+```{r Model with 1 bias}
+#Compute movie bias.
+b_i <- edx_Tidy_train %>% 
+       group_by(movieId) %>%
+       summarize(b_i = sum(rating - mu)/n())
+#Predict ratings on our test set
+  predicted_ratings <- 
+          edx_Tidy_test %>% 
+          left_join(b_i, by = "movieId") %>%
+          mutate(pred = mu + b_i) %>% 
+          mutate(pred_cap_floor = ifelse(pred < 0.5, 0.5, ifelse(pred > 5, 5, pred))) %>%
+          .$pred_cap_floor
+r<-RMSE(predicted_ratings, edx_Tidy_test$rating)
+r<-round(r,5)
+model_rmse<-bind_rows(model_rmse,tibble(Model = "Model with movie bias", RMSE = r))
+kable(model_rmse)
+```
+  
+It is already better than our simple model, showing that our intuition about effects/bias are right  
+  
+### 2.5.3 Model with two bias 
+In this model, we just add two bias, movie ($b_i$) and user ($b_u$) to the average. we can write is as:
+$$
+\tag{6}
+Y_{i,u}= \mu +b_i +b_u +\varepsilon_{i,u}
+$$
+Here is the result:
+```{r Model with 2 bias}
+#Compute movie bias
+  b_i <- edx_Tidy_train %>%
+          group_by(movieId) %>%
+          summarize(b_i = sum(rating - mu)/n())
+#Compute user bias
+b_u <- edx_Tidy_train %>% 
+        left_join(b_i, by="movieId") %>%
+        group_by(userId) %>%
+        summarize(b_u = sum(rating - b_i - mu)/n())
+#Predict ratings on our test set
+predicted_ratings <- edx_Tidy_test %>% 
+          left_join(b_i, by = "movieId") %>%
+          left_join(b_u, by = "userId") %>%
+          mutate(pred = mu + b_i + b_u) %>% 
+          mutate(pred_cap_floor = ifelse(pred < 0.5, 0.5, ifelse(pred > 5, 5, pred))) %>%
+          .$pred_cap_floor
+#Calculate RMSE for the given lambda
+r<-RMSE(predicted_ratings, edx_Tidy_test$rating)
+r<-round(r,5)
+model_rmse<-bind_rows(model_rmse,tibble(Model = "Model with Movie & user bias", RMSE = r))
+kable(model_rmse)
+```  
+  
+Using two bias improve dramatically our **RMSE**  
+  
+### 2.5.4 Model with two bias regularized by a single parameter lambda  
+
+Using same model as previously (see $(6)$). We will now add the regularization of $b_i$ and $b_u$.
+As an example we can write the regularization of $b_i$ as:
+$$
+\tag{7}
+\hat{b_{i}}(\lambda)=\frac{1}{n_i+\lambda}\sum_{1}^{n_i}{(Y_i-\hat{\mu})}
+$$  
+The regularization have a parameter $\lambda$, the greater it is compare to number of sample $n_i$, the smallest the bias is. We will train our model to find $\lambda$ that minimize **RMSE**.  
+Here are the results:  
+```{r Model with 2 bias regularized}
+# Create a sequence of lambda
+lambdas<-seq(3,6,0.25)
+
+#For each lambda of lambdas, compute bias and RMSE in the Train set.
+rmses <- sapply(lambdas, function(l){
+  #Compute movie bias
+  b_i <- edx_Tidy_train %>%
+          group_by(movieId) %>%
+          summarize(b_i = sum(rating - mu)/(n()+l))
+  #Compute user bias
+  b_u <- edx_Tidy_train %>% 
+          left_join(b_i, by="movieId") %>%
+          group_by(userId) %>%
+          summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  #Predict ratings on our test set
+  predicted_ratings <- 
+          edx_Tidy_test %>% 
+          left_join(b_i, by = "movieId") %>%
+          left_join(b_u, by = "userId") %>%
+          mutate(pred = mu + b_i + b_u) %>% 
+          mutate(pred_cap_floor = ifelse(pred < 0.5, 0.5, ifelse(pred > 5, 5, pred))) %>%
+          .$pred_cap_floor
+  #Calculate RMSE for the given lambda
+  return(RMSE(predicted_ratings, edx_Tidy_test$rating))
+})
+```
+
+```{r Plot RMSE by Lambda 2 bias model,fig.height=2.8,fig.width=7}
+#Plot RMSE as a function of lambda
+qplot(lambdas, rmses) +theme_bw()+ggtitle("RMSE by lambda")+xlab("Lambda")+ylab("RMSE")
+```
+ 
+```{r results with 2 bias model regularized}
+r<-rmses[which.min(rmses)]
+r<-round(r,5)
+model_rmse<-bind_rows(model_rmse,tibble(Model = "Model with 2 bias regularized", RMSE = r))
+kable(model_rmse)
+```
+  
+We are getting closer to our target in term of **RMSE**  
+    
+### 2.5.5 Model with 3 bias regularized  
+  
+On top of $b_i$, $b_u$, we will add the release year date bias: $b_y$.  
+Here are the result of this model:
+```{r Model with 3 bias regularized}
+# Create a sequence of lambda
+lambdas<-seq(4,5,0.05)
+
+#For each lambda of lambdas, compute bias and RMSE in the Train set
+rmses <- sapply(lambdas, function(l){
+  #Compute movie bias
+  b_i <- edx_Tidy_train %>%
+          group_by(movieId) %>%
+          summarize(b_i = sum(rating - mu)/(n()+l))
+  #Compute user bias 
+  b_u <- edx_Tidy_train %>% 
+          left_join(b_i, by="movieId") %>%
+          group_by(userId) %>%
+          summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  #Compute release date bias
+  b_y <- edx_Tidy_train %>% 
+          left_join(b_i, by="movieId") %>%
+          left_join(b_u, by="userId") %>%
+          group_by(released) %>%
+          summarize(b_y = sum(rating - b_i - b_u - mu)/(n()+l))
+  #Predict ratings on our test set
+  predicted_ratings <- 
+          edx_Tidy_test %>% 
+          left_join(b_i, by = "movieId") %>%
+          left_join(b_u, by = "userId") %>%
+          left_join(b_y, by = "released") %>%
+          mutate(pred = mu + b_i + b_u + b_y) %>% 
+          mutate(pred_cap_floor = ifelse(pred < 0.5, 0.5, ifelse(pred > 5, 5, pred))) %>%
+          .$pred_cap_floor
+  #Calculate RMSE for the given lambda
+  return(RMSE(predicted_ratings, edx_Tidy_test$rating))
+})
+```
+
+```{r Plot RMSE by Lambda 3 bias model,fig.height=2.8,fig.width=7}
+#Plot RMSE as a function of lambda
+qplot(lambdas, rmses) +theme_bw()+ggtitle("RMSE by lambda")+xlab("Lambda")+ylab("RMSE")
+```
+ 
+```{r results with 3 bias model regularized}
+r<-rmses[which.min(rmses)]
+r<-round(r,5)
+model_rmse<-bind_rows(model_rmse,tibble(Model = "Model with 3 bias regularized", RMSE = r))
+kable(model_rmse)
+```
+  
+That's it we are below 0.8649.  
+  
+### 2.5.6  Model with 4 bias 
+
+We will add the genre regularized bias $b_g$ to the previous model. 
+```{r Model 4 bias regularized}
+# Create a sequence of lambda
+lambdas<-seq(2,6,0.25)
+
+#For each lambda of lambdas, compute bias and RMSE in the Train set.
+rmses <- sapply(lambdas, function(l){
+  #Compute movie bias
+  b_i <- edx_Tidy_train %>%
+          group_by(movieId) %>%
+          summarize(b_i = sum(rating - mu)/(n()+l))
+  #Compute user bias
+  b_u <- edx_Tidy_train %>% 
+          left_join(b_i, by="movieId") %>%
+          group_by(userId) %>%
+          summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  #Compute release date bias
+  b_y <- edx_Tidy_train %>% 
+          left_join(b_i, by="movieId") %>%
+          left_join(b_u, by="userId") %>%
+          group_by(released) %>%
+          summarize(b_y = sum(rating - b_i - b_u - mu)/(n()+l))
+  #Compute genre bias
+  b_g <- edx_Tidy_train %>% 
+          left_join(b_i, by="movieId") %>%
+          left_join(b_u, by="userId") %>%
+          left_join(b_y, by="released") %>%
+          group_by(genres) %>%
+          summarize(b_g = sum(rating - b_i - b_u - b_y - mu)/(n()+l))
+  #Predict ratings on our test set
+  predicted_ratings <- 
+          edx_Tidy_test %>% 
+          left_join(b_i, by = "movieId") %>%
+          left_join(b_u, by = "userId") %>%
+          left_join(b_y, by = "released") %>%
+          left_join(b_g, by="genres") %>%
+          mutate(pred = mu + b_i + b_u + b_y + b_g) %>% 
+          mutate(pred_cap_floor = ifelse(pred < 0.5, 0.5, ifelse(pred > 5, 5, pred))) %>%
+          .$pred_cap_floor
+  #Calculate RMSE for the given lambda
+  return(RMSE(predicted_ratings, edx_Tidy_test$rating))
+})
+```
+
+```{r Plot RMSE by Lambda 4 bias model,fig.height=2.8,fig.width=7}
+#Plot RMSE as a function of lambda
+qplot(lambdas, rmses) +theme_bw()+ggtitle("RMSE by lambda")+xlab("Lambda")+ylab("RMSE")
+```
+ 
+```{r results with 4 bias model regularized}
+r<-rmses[which.min(rmses)]
+r<-round(r,5)
+model_rmse<-bind_rows(model_rmse,tibble(Model = "Model with 4 bias regularized", RMSE = r))
+kable(model_rmse)
+```  
+  
+It improves our prediction.  
+  
+### 2.5.7 Model with 5 bias regularized by a single parameter lambda  
+
+To finish, We will aggregate timestamp by year, and add it as bias $b_{ry}$. 
+```{r Model 5 bias regularized}
+# Create a sequence of lambda
+lambdas<-seq(4.5,5,0.05)
+
+#For each lambda of lambdas, compute bias and RMSE in the Train set.
+rmses <- sapply(lambdas, function(l){
+  #Compute movie bias
+  b_i <- edx_Tidy_train %>%
+          group_by(movieId) %>%
+          summarize(b_i = sum(rating - mu)/(n()+l))
+  #Compute user bias
+  b_u <- edx_Tidy_train %>% 
+          left_join(b_i, by="movieId") %>%
+          group_by(userId) %>%
+          summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  #Compute release date bias
+  b_y <- edx_Tidy_train %>% 
+          left_join(b_i, by="movieId") %>%
+          left_join(b_u, by="userId") %>%
+          group_by(released) %>%
+          summarize(b_y = sum(rating - b_i - b_u - mu)/(n()+l))
+  #Compute genre bias
+  b_g <- edx_Tidy_train %>% 
+          left_join(b_i, by="movieId") %>%
+          left_join(b_u, by="userId") %>%
+          left_join(b_y, by="released") %>%
+          group_by(genres) %>%
+          summarize(b_g = sum(rating - b_i - b_u - b_y - mu)/(n()+l))
+  #Compute rating year bias
+  b_ry <- edx_Tidy_train %>% 
+          left_join(b_i, by="movieId") %>%
+          left_join(b_u, by="userId") %>%
+          left_join(b_y, by="released") %>%
+          left_join(b_g, by="genres") %>%
+          group_by(RY_TS) %>%
+          summarize(b_ry = sum(rating - b_i - b_u - -b_y - b_g - mu)/(n()+l))
+  #Predict ratings on our test set
+  predicted_ratings <- 
+          edx_Tidy_test %>% 
+          left_join(b_i, by = "movieId") %>%
+          left_join(b_u, by = "userId") %>%
+          left_join(b_y, by = "released") %>%
+          left_join(b_g, by="genres") %>%
+          left_join(b_ry, by="RY_TS") %>%
+          mutate(pred = mu + b_i + b_u + b_y + b_g + b_ry) %>% 
+          mutate(pred_cap_floor = ifelse(pred < 0.5, 0.5, ifelse(pred > 5, 5, pred))) %>%
+          .$pred_cap_floor
+  #Calculate RMSE for the given lambda
+  return(RMSE(predicted_ratings, edx_Tidy_test$rating))
+})
+```
+
+```{r model Plot RMSE by Lambda 5,fig.height=2.8,fig.width=7}
+#Plot RMSE as a function of lambda
+qplot(lambdas, rmses) +theme_bw()+ggtitle("RMSE by lambda")+xlab("Lambda")+ylab("RMSE")
+```
+ 
+```{r results with 5 bias model regularized}
+l <- lambdas[which.min(rmses)]
+r<-rmses[which.min(rmses)]
+r<-round(r,5)
+model_rmse<-bind_rows(model_rmse,tibble(Model = "Model with 5 bias regularized", RMSE = r))
+kable(model_rmse)
+```  
+ 
+We have no improvement by adding the rating year, so we will drop this bias.  
+Anyway using rating date for a recommendation system, is a bit tricky except for it seasonality (i.e people to gave better rating on Saturday or in winter's month...), bias we saw have no real effect.  
+A recommendation system should not give rating as if you had rated the film in the past, recommendation is a good rating you are likely to gave if you see the film now, so rating date likely to be in the future.
+
+  
+## 2.6 Test our *Algorithm* with the validation_Tidy set for the final assessment.
+
+Now that our *Algorithm* is trained, will need to pass our final hurdle: apply it on edx_Tidy set and evaluate it against the validation_Tidy set. Please find here the result:
+```{r Apply our System to edx_Tidy and evaluate it with valuation_Tidy set}
+#compute mean
+mu<-mean(edx_Tidy$rating)
+print(paste0("Using the mean of Edx_Tidy, equals to: ",mu))
+#Coremodel 4 bias
+#Compute movie bias
+b_i <- edx_Tidy %>%
+          group_by(movieId) %>%
+          summarize(b_i = sum(rating - mu)/(n()+l))
+#Compute user bias
+b_u <- edx_Tidy %>% 
+          left_join(b_i, by="movieId") %>%
+          group_by(userId) %>%
+          summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+#Compute realease date bias
+b_y <- edx_Tidy %>% 
+          left_join(b_i, by="movieId") %>%
+          left_join(b_u, by="userId") %>%
+          group_by(released) %>%
+          summarize(b_y = sum(rating - b_i - b_u - mu)/(n()+l))
+#Compute genre bias
+b_g <- edx_Tidy %>% 
+          left_join(b_i, by="movieId") %>%
+          left_join(b_u, by="userId") %>%
+          left_join(b_y, by="released") %>%
+          group_by(genres) %>%
+          summarize(b_g = sum(rating - b_i - b_u - b_y - mu)/(n()+l))
+#Predict ratings on our validation set
+predicted_ratings <- 
+          validation_Tidy %>% 
+          left_join(b_i, by = "movieId") %>%
+          left_join(b_u, by = "userId") %>%
+          left_join(b_y, by = "released") %>%
+          left_join(b_g, by="genres") %>%
+          mutate(pred = mu + b_i + b_u + b_y + b_g) %>% 
+          mutate(pred_cap_floor = ifelse(pred < 0.5, 0.5, ifelse(pred > 5, 5, pred))) %>%
+          .$pred_cap_floor
+
+#Calculate RMSE for the given lambda
+r<-RMSE(predicted_ratings, validation_Tidy$rating)
+r<-round(r,5)
+model_rmse<-bind_rows(model_rmse,tibble(Model = "Final assessment with Validation set", RMSE = r))
+kable(model_rmse)
+```
+  
+  We are at 0.8641 below the targeted **RMSE** of 0.8649.  
+  
+## 2.7 Discussing performance  
+
+The *algorithm* we use is relatively simple, and only compute average and reorganize data. So it is easy to run on a home personal computer, and it doesn't take ages to run.  
+The RMSE we found at 0.8641 is 18% better than the simple model using average as predictions.  
+The model use average rating and add bias that are intuitive, even regularization is intuitive, so this *model* is also easy to understand for someone with no prior statistical skills. 
+Our model have a problem with small sample, in fact by using regularization we do minimise the weight of small sample, it is good for our RMSE but we are losing informations, we are not able to predict new film or predict rating by new user, for this we are blind.
+
+# **3 CONCLUSION**
+  
+We had follow instructions given in this course and process/model/algorithm saw in previous courses. We trained a machine learning algorithm, that produce a better level than the targeted RMSE.  
+But still the winner (The ensemble) in July 2009 of the Netflix challenges obtain 0.8558 (dataset was with 100 million entries). And today you can use package or code that give an even lower RMSE. So it shows us, that the road is still long, but at least we are engage on it.  
+One of the tool that can improve our RMSE would have been Matrix factorization , it is related to factor analysis, singular value decomposition (SVD), and principal component analysis (PCA) (see section 33.11 [link](https://rafalab.github.io/dsbook/large-datasets.html)). With this model, we can spot similar rating pattern within users or/and film.
+  
+Now if we get more predictors like for users: sex, age, location, education..., RMSE could be dramatically improved.  
+  
+As my first project in data science, it is a small one, but I learn a lot from it. I use all learnings obtain during the previous eight courses of Havardx "Data Science", honestly it was great fun. And despite its modesty, I am relatively proud of my first long R code, my first use of R Markdown and also my first publish in LaTeX. 
+
+
+
+
+
+
